@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>N88-BASIC LINEジェネレーター</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        .canvas-container {
+            width: 100%; 
+            border: 1px solid #ccc;
+            overflow: hidden; 
+        }
+        canvas { 
+            display: block; 
+        }
+        textarea::-webkit-scrollbar {
+            width: 8px;
+        }
+        textarea::-webkit-scrollbar-track {
+            background: #f1f1f1;
+            border-radius: 10px;
+        }
+        textarea::-webkit-scrollbar-thumb {
+            background: #888;
+            border-radius: 10px;
+        }
+        textarea::-webkit-scrollbar-thumb:hover {
+            background: #555;
+        }
+        .loader {
+            border: 5px solid #f3f3f3;
+            border-top: 5px solid #3498db;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body class="bg-gray-100 p-4 md:p-8">
+    <div class="container mx-auto max-w-5xl bg-white p-6 rounded-lg shadow-xl">
+        <header class="mb-6 text-center">
+            <h1 class="text-3xl font-bold text-gray-700">N88-BASIC LINE文ジェネレーター</h1>
+            <p class="text-sm text-gray-500 mt-1">プロンプトから線画を生成し、N88-BASICのLINE文に変換します。</p>
+        </header>
+
+        <div class="mb-6">
+            <label for="prompt" class="block text-lg font-medium text-gray-700 mb-2">線画生成プロンプト:</label>
+            <textarea id="prompt" rows="3" class="w-full p-3 border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500" placeholder="例: 猫、家、車など。複雑な絵は行数が多くなることがあります。"></textarea>
+            <button id="generateButton" class="mt-3 w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 px-4 rounded-md shadow-md transition duration-150 ease-in-out focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2">
+                生成実行
+            </button>
+        </div>
+
+        <div id="loadingIndicator" class="hidden loader"></div>
+        <div id="messageArea" class="hidden my-4 p-3 rounded-md"></div>
+
+        <div id="resultsArea" class="grid grid-cols-1 md:grid-cols-3 gap-6 mt-8 hidden">
+            <div>
+                <h2 class="text-xl font-semibold text-gray-700 mb-2">1. 生成された線画 (元画像)</h2>
+                <div class="canvas-container bg-white rounded-md shadow">
+                    <img id="generatedImage" alt="生成された線画" class="w-full h-auto block object-contain">
+                </div>
+            </div>
+            <div>
+                <h2 class="text-xl font-semibold text-gray-700 mb-2">2. N88-BASIC LINE文</h2>
+                <textarea id="basicCode" rows="15" class="w-full p-3 border border-gray-300 rounded-md shadow-sm bg-gray-50 text-sm font-mono" readonly placeholder="ここにN88-BASICのコードが出力されます..."></textarea>
+                <button id="copyButton" class="mt-2 w-full bg-green-500 hover:bg-green-600 text-white font-semibold py-2 px-4 rounded-md shadow-md transition duration-150 ease-in-out focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2">
+                    コードをコピー
+                </button>
+            </div>
+            <div>
+                <h2 class="text-xl font-semibold text-gray-700 mb-2">3. LINE文での描画結果 (640x400)</h2>
+                <div class="canvas-container bg-black rounded-md shadow">
+                    <canvas id="outputCanvas" width="640" height="400" class="w-full h-auto block"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const promptInput = document.getElementById('prompt');
+        const generateButton = document.getElementById('generateButton');
+        const loadingIndicator = document.getElementById('loadingIndicator');
+        const messageArea = document.getElementById('messageArea');
+        const resultsArea = document.getElementById('resultsArea');
+        const generatedImage = document.getElementById('generatedImage');
+        const basicCodeTextarea = document.getElementById('basicCode');
+        const outputCanvas = document.getElementById('outputCanvas');
+        const copyButton = document.getElementById('copyButton');
+
+        const CANVAS_WIDTH = 640;
+        const CANVAS_HEIGHT = 400;
+
+        function showMessage(text, type = 'error') {
+            messageArea.textContent = text;
+            messageArea.classList.remove('hidden', 'bg-red-100', 'text-red-700', 'bg-green-100', 'text-green-700', 'bg-yellow-100', 'text-yellow-700');
+            if (type === 'error') {
+                messageArea.classList.add('bg-red-100', 'text-red-700');
+            } else if (type === 'success') {
+                messageArea.classList.add('bg-green-100', 'text-green-700');
+            } else if (type === 'warning') {
+                 messageArea.classList.add('bg-yellow-100', 'text-yellow-700');
+            }
+            messageArea.classList.remove('hidden');
+        }
+
+        function hideMessage() {
+            messageArea.classList.add('hidden');
+        }
+
+        generateButton.addEventListener('click', async () => {
+            const userPrompt = promptInput.value.trim();
+            if (!userPrompt) {
+                showMessage('プロンプト（英文推奨）を入力してください。');
+                return;
+            }
+
+            loadingIndicator.classList.remove('hidden');
+            resultsArea.classList.add('hidden');
+            hideMessage();
+            basicCodeTextarea.value = '';
+            generatedImage.src = ''; 
+            const ctx = outputCanvas.getContext('2d');
+            ctx.fillStyle = 'black';
+            ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+
+            try {
+                const apiKey = ""; // Provided by Canvas environment
+                // プロンプト修正: ユーザー入力を主題としてより直接的に指定
+                const fullPrompt = `Create a black and white line art image. The primary subject MUST be: '${userPrompt}'.
+Style requirements:
+1.  Lines: Use ONLY 1-pixel-wide straight black lines (horizontal, vertical, or diagonal). Absolutely NO CURVES.
+2.  Background: The background MUST be completely plain, solid, pure white. No textures, patterns, or other objects in the background.
+3.  Anti-aliasing: None.
+4.  Image Resolution: 1024x1024 pixels.
+The final image must be a clear, recognizable, straight-line representation of '${userPrompt}'. Do not generate abstract geometric patterns unless '${userPrompt}' itself is a geometric pattern. The depiction of '${userPrompt}' is the most important aspect.`;
+                
+                console.log("Full prompt to API:", fullPrompt); // デバッグ用にコンソールに出力
+
+                const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key=${apiKey}`;
+                const payload = {
+                    instances: [{ prompt: fullPrompt }],
+                    parameters: { "sampleCount": 1 }
+                };
+
+                const response = await fetch(apiUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    console.error('Image generation API error:', errorData);
+                    throw new Error(`画像生成に失敗しました: ${errorData.error?.message || response.statusText}`);
+                }
+
+                const result = await response.json();
+
+                if (result.predictions && result.predictions.length > 0 && result.predictions[0].bytesBase64Encoded) {
+                    const imageUrl = `data:image/png;base64,${result.predictions[0].bytesBase64Encoded}`;
+                    generatedImage.src = imageUrl; 
+                    resultsArea.classList.remove('hidden');
+
+                    generatedImage.onload = () => {
+                        analyzeImageAndGenerateBasic(generatedImage);
+                    }; 
+                    generatedImage.onerror = () => {
+                         showMessage('生成された画像の読み込みに失敗しました。');
+                         loadingIndicator.classList.add('hidden');
+                    }; 
+
+                } else {
+                    console.error('Unexpected API response structure:', result);
+                    throw new Error('画像生成結果の形式が正しくありません。');
+                }
+
+            } catch (error) {
+                console.error('Error:', error);
+                showMessage(`エラーが発生しました: ${error.message}`);
+                loadingIndicator.classList.add('hidden');
+            }
+        }); 
+
+        function markLineVisited(x1, y1, x2, y2, visited) {
+            let dx = Math.abs(x2 - x1);
+            let dy = Math.abs(y2 - y1);
+            let sx = (x1 < x2) ? 1 : -1;
+            let sy = (y1 < y2) ? 1 : -1;
+            let err = dx - dy;
+            let currentX = x1;
+            let currentY = y1;
+
+            while (true) {
+                if (currentX >= 0 && currentX < CANVAS_WIDTH && currentY >= 0 && currentY < CANVAS_HEIGHT) {
+                    visited[currentY][currentX] = true;
+                }
+                if ((currentX === x2) && (currentY === y2)) break;
+                let e2 = 2 * err;
+                if (e2 > -dy) {
+                    err -= dy;
+                    currentX += sx;
+                }
+                if (e2 < dx) {
+                    err += dx;
+                    currentY += sy;
+                }
+            }
+        }
+
+        function analyzeImageAndGenerateBasic(imgElement) {
+            const sourceCanvas = document.createElement('canvas');
+            sourceCanvas.width = CANVAS_WIDTH;
+            sourceCanvas.height = CANVAS_HEIGHT;
+            const sourceCtx = sourceCanvas.getContext('2d', { willReadFrequently: true });
+            
+            sourceCtx.drawImage(imgElement, 0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+
+            let imageData;
+            try {
+                imageData = sourceCtx.getImageData(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+            } catch (e) {
+                console.error("Error getting ImageData (tainted canvas?):", e);
+                showMessage("Canvasから画像データを取得できませんでした。");
+                loadingIndicator.classList.add('hidden');
+                return;
+            }
+            const data = imageData.data;
+
+            const binaryData = Array(CANVAS_HEIGHT).fill(null).map(() => Array(CANVAS_WIDTH).fill(1)); 
+            const visited = Array(CANVAS_HEIGHT).fill(null).map(() => Array(CANVAS_WIDTH).fill(false));
+
+            const threshold = 80 * 3; 
+            for (let y = 0; y < CANVAS_HEIGHT; y++) {
+                for (let x = 0; x < CANVAS_WIDTH; x++) {
+                    const i = (y * CANVAS_WIDTH + x) * 4;
+                    if (data[i] + data[i+1] + data[i+2] < threshold) { 
+                        binaryData[y][x] = 0; 
+                    }
+                }
+            }
+            
+            const lineStatements = [];
+            let lineNumber = 10;
+            const lineColor = 7; 
+            const MIN_LINE_PIXELS = 4; 
+
+            // 水平線抽出
+            for (let y = 0; y < CANVAS_HEIGHT; y++) {
+                for (let x = 0; x < CANVAS_WIDTH; x++) {
+                    if (binaryData[y][x] === 0 && !visited[y][x]) {
+                        let startX = x;
+                        let currentX = x;
+                        while (currentX + 1 < CANVAS_WIDTH && binaryData[y][currentX + 1] === 0) {
+                            currentX++;
+                        }
+                        if (currentX - startX + 1 >= MIN_LINE_PIXELS) { 
+                            lineStatements.push(`${lineNumber} LINE (${startX},${y})-(${currentX},${y}),${lineColor}`);
+                            lineNumber += 10;
+                            markLineVisited(startX, y, currentX, y, visited);
+                        }
+                        x = currentX; 
+                    }
+                }
+            }
+
+            // 垂直線抽出
+            for (let x = 0; x < CANVAS_WIDTH; x++) {
+                for (let y = 0; y < CANVAS_HEIGHT; y++) {
+                    if (binaryData[y][x] === 0 && !visited[y][x]) {
+                        let startY = y;
+                        let currentY = y;
+                        while (currentY + 1 < CANVAS_HEIGHT && binaryData[currentY + 1][x] === 0) {
+                            currentY++;
+                        }
+                        if (currentY - startY + 1 >= MIN_LINE_PIXELS) {
+                            lineStatements.push(`${lineNumber} LINE (${x},${startY})-(${x},${currentY}),${lineColor}`);
+                            lineNumber += 10;
+                            markLineVisited(x, startY, x, currentY, visited);
+                        }
+                        y = currentY; 
+                    }
+                }
+            }
+            
+            // 斜線抽出 (dx=1, dy=1)
+            for (let y = 0; y < CANVAS_HEIGHT; y++) {
+                for (let x = 0; x < CANVAS_WIDTH; x++) {
+                    if (binaryData[y][x] === 0 && !visited[y][x]) {
+                        let startX = x;
+                        let startY = y;
+                        let currentX = x;
+                        let currentY = y;
+                        while (currentX + 1 < CANVAS_WIDTH && currentY + 1 < CANVAS_HEIGHT && binaryData[currentY + 1][currentX + 1] === 0) {
+                            currentX++;
+                            currentY++;
+                        }
+                        if (currentX - startX + 1 >= MIN_LINE_PIXELS) { 
+                            lineStatements.push(`${lineNumber} LINE (${startX},${startY})-(${currentX},${currentY}),${lineColor}`);
+                            lineNumber += 10;
+                            markLineVisited(startX, startY, currentX, currentY, visited);
+                        }
+                    }
+                }
+            }
+
+            // 斜線抽出 (dx=1, dy=-1)
+            for (let y = 0; y < CANVAS_HEIGHT; y++) { 
+                for (let x = 0; x < CANVAS_WIDTH; x++) {
+                    if (binaryData[y][x] === 0 && !visited[y][x]) {
+                        let startX = x;
+                        let startY = y;
+                        let currentX = x;
+                        let currentY = y;
+                        while (currentX + 1 < CANVAS_WIDTH && currentY - 1 >= 0 && binaryData[currentY - 1][currentX + 1] === 0) {
+                            currentX++;
+                            currentY--;
+                        }
+                        if (currentX - startX + 1 >= MIN_LINE_PIXELS) { 
+                            lineStatements.push(`${lineNumber} LINE (${startX},${startY})-(${currentX},${currentY}),${lineColor}`);
+                            lineNumber += 10;
+                            markLineVisited(startX, startY, currentX, currentY, visited);
+                        }
+                    }
+                }
+            }
+
+            basicCodeTextarea.value = lineStatements.join('\n');
+            drawBasicLines(lineStatements);
+            loadingIndicator.classList.add('hidden');
+
+            if (lineStatements.length === 0) {
+                showMessage("線画からLINE文を抽出できませんでした。プロンプトを変更するか、より単純な図形を試してみてください。", "warning");
+            } else {
+                 showMessage(`処理が完了しました。LINE文 ${lineStatements.length}行生成。`, "success");
+            }
+        }
+
+        function drawBasicLines(statements) {
+            const ctx = outputCanvas.getContext('2d');
+            ctx.fillStyle = 'black'; 
+            ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+            ctx.strokeStyle = 'white'; 
+            ctx.lineWidth = 1; 
+
+            const lineRegex = /LINE\s*\((\d+),(\d+)\)-\((\d+),(\d+)\)/;
+            statements.forEach(statement => {
+                const match = statement.match(lineRegex);
+                if (match) {
+                    const x1 = parseInt(match[1]);
+                    const y1 = parseInt(match[2]);
+                    const x2 = parseInt(match[3]);
+                    const y2 = parseInt(match[4]);
+
+                    ctx.beginPath();
+                    ctx.moveTo(x1 + 0.5, y1 + 0.5); 
+                    ctx.lineTo(x2 + 0.5, y2 + 0.5);
+                    ctx.stroke();
+                }
+            });
+        }
+        
+        copyButton.addEventListener('click', () => {
+            if (basicCodeTextarea.value) {
+                basicCodeTextarea.select();
+                try {
+                    document.execCommand('copy');
+                    showMessage('N88-BASICコードをクリップボードにコピーしました。', 'success');
+                } catch (err) {
+                    console.error('クリップボードへのコピーに失敗しました (execCommand):', err);
+                    showMessage('クリップボードへのコピーに失敗しました。手動でコピーしてください。', 'error');
+                }
+            } else {
+                showMessage('コピーするコードがありません。', 'error');
+            }
+        });
+    </script>
+</body>
+</html>
